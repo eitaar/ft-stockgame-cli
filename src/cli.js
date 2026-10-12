@@ -50,9 +50,16 @@ Raw / escape hatch
 Global options
   --json        Machine-readable output
   --token <jwt> Use a bearer token directly
-  --cookie <c>  Use an FT session cookie directly
+  --cookie <c>  Use an FT session cookie directly (bootstrap without a browser)
+  --no-browser  Never contact the browser: refresh using only the cached credentials
   --port <n>    DevTools port of the logged-in browser (default 9222)
   -h, --help    Show this help
+
+Auth model
+  The FT session cookie (FTSession_s) is the root credential; the game's JWT is
+  derived from it via /v1/user/initialize. Once one cookie is cached, every later
+  run refreshes the JWT on its own — no browser involved — until the FT session
+  itself expires (~6 months). Use --no-browser to enforce that.
 `;
 
 function parseArgs(argv) {
@@ -86,13 +93,21 @@ function die(msg) {
 }
 
 async function makeApi(flags) {
-  const { token, claims, source } = await resolveAuth({
+  const noBrowser = Boolean(flags['no-browser']) || process.env.STOCKGAME_NO_BROWSER === '1';
+  const opts = {
     token: typeof flags.token === 'string' ? flags.token : undefined,
     cookie: typeof flags.cookie === 'string' ? flags.cookie : undefined,
     port: flags.port ? Number(flags.port) : 9222,
     refresh: Boolean(flags.refresh),
+    allowBrowser: !noBrowser,
+  };
+  const { token, claims, source } = await resolveAuth(opts);
+  const api = new Api(token, {
+    // Transparent token refresh: if any call comes back unauthorized, re-initialize
+    // from the cached cookie and retry once, without the caller noticing.
+    onUnauthorized: async () => (await resolveAuth({ ...opts, token: undefined, refresh: true })).token,
   });
-  return { api: new Api(token), claims, source };
+  return { api, claims, source };
 }
 
 async function currentFund(api, flags) {
@@ -121,10 +136,13 @@ function stockByEid(universe, eid) {
 
 async function cmdAuth(flags) {
   const { token, claims, source } = await makeApi(flags);
-  const exp = claims?.exp ? new Date(claims.exp * 1000).toISOString() : '-';
-  if (flags.json) return printJson({ source, token, claims });
+  const s = readSession();
+  const exp = claims?.exp ? new Date(claims.exp * 1000) : null;
+  const minsLeft = exp ? Math.round((exp.getTime() - Date.now()) / 60000) : null;
+  if (flags.json) return printJson({ source, expiresAt: exp?.toISOString() ?? null, claims, cookieCached: Boolean(s?.cookie) });
   console.log(`auth source : ${source}`);
-  console.log(`token exp   : ${exp}`);
+  console.log(`token exp   : ${exp ? exp.toISOString() : '-'}${minsLeft != null ? `  (in ${minsLeft} min)` : ''}`);
+  console.log(`cookie      : ${s?.cookie ? 'cached (refreshes without the browser)' : 'not cached yet'}`);
   console.log(`extId       : ${claims?.extId ?? '-'}`);
   console.log(`userId      : ${claims?.uid ?? '-'}`);
 }

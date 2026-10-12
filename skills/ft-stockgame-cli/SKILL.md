@@ -50,11 +50,16 @@ Always start here. This proves the session works and prints the account context
 node src/cli.js whoami
 ```
 
-- It tries, in order: `--token`, a cached JWT, an `--cookie`, then the browser on
-  `:9222`. If it fails with "no DevTools endpoint", go back to prerequisite 2.
+- It tries, in order: `--token`, a cached JWT, a cached FT cookie, the browser on
+  `:9222`, then a local browser profile. If it fails with "no DevTools endpoint" and
+  no cached cookie exists, go back to prerequisite 2.
 - The per-account `secret` printed here is required for the realtime feed.
-- Flags for any command: `--json`, `--token <jwt>`, `--cookie <c>`, `--port <n>`.
-- `node src/cli.js auth --refresh` forces a fresh token.
+- Flags for any command: `--json`, `--token <jwt>`, `--cookie <c>`, `--no-browser`,
+  `--port <n>`.
+- `node src/cli.js auth --refresh` forces a fresh token. Refreshing is self-contained:
+  once one FT cookie is cached, the CLI renews the JWT with no browser involved.
+  Use `--no-browser` (or `STOCKGAME_NO_BROWSER=1`) to guarantee it never touches a
+  browser — handy for headless / CI use.
 
 ## Core reads
 

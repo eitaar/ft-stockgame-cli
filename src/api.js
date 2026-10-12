@@ -9,11 +9,12 @@ export class ApiError extends Error {
 }
 
 export class Api {
-  constructor(token) {
+  constructor(token, { onUnauthorized } = {}) {
     this.token = token;
+    this.onUnauthorized = onUnauthorized;
   }
 
-  async #call(method, path, { body, raw = false } = {}) {
+  async #call(method, path, { body, raw = false, retry = true } = {}) {
     const headers = { Origin: ORIGIN, Referer: `${GAME_URL}` };
     if (this.token) headers.Authorization = `Bearer ${this.token}`;
     const init = { method, headers };
@@ -29,6 +30,14 @@ export class Api {
       json = text ? JSON.parse(text) : null;
     } catch {
       json = text;
+    }
+    // Token expired or revoked mid-session: refresh once and retry, transparently.
+    if ((res.status === 401 || res.status === 403) && retry && this.onUnauthorized) {
+      const fresh = await this.onUnauthorized();
+      if (fresh) {
+        this.token = fresh;
+        return this.#call(method, path, { body, raw, retry: false });
+      }
     }
     if (!res.ok) throw new ApiError(`${method} ${path} -> HTTP ${res.status}`, res.status, json);
     return raw ? json : json?.result ?? json;

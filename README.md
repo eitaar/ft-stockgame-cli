@@ -65,7 +65,33 @@ node src/cli.js reweight --fund 11479 --set "S4=11,S2=8,S40=6,S108=8,S5=11,S13=5
 node src/cli.js --help
 ```
 
-Global flags: `--json`, `--token <jwt>`, `--cookie <c>`, `--port <n>`, `--refresh`.
+Global flags: `--json`, `--token <jwt>`, `--cookie <c>`, `--no-browser`, `--port <n>`, `--refresh`.
+
+### Session model — refreshing without the browser
+
+The root credential is the FT session cookie (`FTSession_s`); the game's JWT is
+derived from it via `/v1/user/initialize`. There is **no** JWT refresh token and
+the FT session cannot be extended server-side, so:
+
+- The cookie is cached in `~/.config/stockgame/session.json` on first use.
+- After that, **every run renews the JWT by itself** — cached cookie →
+  `initialize` → fresh 7-day JWT — with **zero browser involvement**.
+- `--no-browser` (or `STOCKGAME_NO_BROWSER=1`) enforces this: the CLI will never
+  open a DevTools connection or read a browser profile, and fails loudly instead.
+- The browser is only needed to **bootstrap** a cookie (once) or after the FT
+  session itself expires (`rememberMe` sessions last ~6 months; your `expiryTime`
+  is returned by `session-next.ft.com`).
+
+Bootstrap options, in order of preference:
+
+1. `--cookie "FTSession_s=..."` — paste it once; nothing else ever touches a browser.
+2. A browser started with `--remote-debugging-port=9222` (read over DevTools).
+3. A local Chrome/Helium/Edge/Brave profile (decrypted directly from its cookie
+   store with DPAPI — works while the browser is **closed**, no DevTools needed).
+
+So the practical answer to "can it refresh by itself?": **yes** — one cached cookie
+keeps the CLI self-sufficient for the lifetime of the FT session.
+
 
 ---
 
