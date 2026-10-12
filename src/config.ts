@@ -1,12 +1,14 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import type { SessionData } from './types.js';
 
 export const HTTP_BASE = 'https://api.ft-s02-prod.fantasy.norkon.net/api/';
 export const ORIGIN = 'https://stockpickinggame.ft.com';
 export const GAME_URL = 'https://stockpickinggame.ft.com/';
 
-export const CONFIG_DIR = process.env.STOCKGAME_CONFIG_DIR || path.join(os.homedir(), '.config', 'stockgame');
+export const CONFIG_DIR =
+  process.env.STOCKGAME_CONFIG_DIR ?? path.join(os.homedir(), '.config', 'stockgame');
 export const SESSION_FILE = path.join(CONFIG_DIR, 'session.json');
 
 /** Rules the web picker enforces (from the Nuxt config in the game bundle). */
@@ -18,10 +20,10 @@ export const RULES = {
   maxPickPct: 25,
   minInvestedPct: 75,
   maxInvestedPct: 100,
-};
+} as const;
 
 /** 2-digit GICS sector code -> label (as shown in the picker). */
-export const GICS = {
+export const GICS: Record<number, string> = {
   10: 'Energy',
   15: 'Materials',
   20: 'Industrials',
@@ -35,15 +37,15 @@ export const GICS = {
   60: 'Real Estate',
 };
 
-export function readSession() {
+export function readSession(): SessionData | null {
   try {
-    return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+    return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8')) as SessionData;
   } catch {
     return null;
   }
 }
 
-export function writeSession(session) {
+export function writeSession(session: SessionData): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
   try {
@@ -53,7 +55,7 @@ export function writeSession(session) {
   }
 }
 
-export function clearSession() {
+export function clearSession(): void {
   try {
     fs.rmSync(SESSION_FILE);
   } catch {

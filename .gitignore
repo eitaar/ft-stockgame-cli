@@ -1,6 +1,9 @@
 # dependencies
 node_modules/
 
+# build output (rebuilt by `npm install` / `npm run build`)
+/dist/
+
 # tooling config
 .commandcode/
 

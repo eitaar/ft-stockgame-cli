@@ -1,12 +1,18 @@
 # ft-stockgame-cli
 
-A CLI + agent skill for the **FT Stock Picking Game**
-(`https://stockpickinggame.ft.com/`) — it drives the game's backend directly so
-you can do the same things the web GUI does without clicking through the site,
-and it doubles as a skill that teaches coding agents how to use it.
+A **TypeScript** tool for the **FT Stock Picking Game**
+(`https://stockpickinggame.ft.com/`) that exposes the game's backend three ways:
 
-It reuses the session of a browser you are **already logged into**. No password
-is ever handled or stored in plain text by the tool.
+1. a **CLI** that mirrors the web GUI,
+2. a **Hono HTTP server**, and
+3. an **MCP server** (Streamable HTTP) so an agent can drive the game as tools,
+
+plus a **skills.sh** skill that teaches coding agents how to use it. It reuses the
+session of a browser you are **already logged into** — no password is ever handled.
+
+The core uses Web-standard APIs only (`fetch`, `WebSocket`, `crypto`), so it runs on
+**Node ≥ 22, Bun and Deno**; the only runtime dependencies are `hono` and
+`@hono/node-server` (the latter only on Node).
 
 ---
 
@@ -31,7 +37,8 @@ is ever handled or stored in plain text by the tool.
 
 ## Requirements
 
-- Node.js >= 22 (uses built-in `fetch`/`WebSocket`; the only dependency is `ws`).
+- **Node ≥ 22** (or Bun ≥ 1.1 / Deno ≥ 2 — the code is runtime-agnostic; Node is what
+  has been verified).
 - A Chromium-family browser (tested with **Helium**) where you are logged in to
   `ft.com`, started with remote debugging enabled.
 
@@ -46,23 +53,26 @@ Close the browser, then relaunch it with a debug port. Your login persists.
 
 Check it: <http://127.0.0.1:9222/json/version> should return JSON.
 
-## Install
+## Install & build
 
 ```bash
-npm install
+npm install         # installs deps and runs `tsc` (prepare) into dist/
+npm run build       # explicit build
 npm link            # optional: exposes the `stockgame` command
 ```
 
-## Usage
+Run without building, via tsx: `npm run dev -- whoami`.
+
+## Usage (CLI)
 
 ```bash
-node src/cli.js whoami          # pulls the session from the browser on :9222
-node src/cli.js portfolio       # live value, picks, scheduled trades, exposure
-node src/cli.js leagues         # your leagues
-node src/cli.js league 640      # league page, funds, returns, history
-node src/cli.js stocks --search nvidia
-node src/cli.js reweight --fund 11479 --set "S4=11,S2=8,S40=6,S108=8,S5=11,S13=5,S687=8,S6=5,S3=5,S15=5,S27=5,S2=8" --dry-run
-node src/cli.js --help
+node dist/cli.js whoami          # pulls the session from the browser on :9222
+node dist/cli.js portfolio       # live value, picks, scheduled trades, exposure
+node dist/cli.js leagues         # your leagues
+node dist/cli.js league 640      # league page, funds, returns, history
+node dist/cli.js stocks --search nvidia
+node dist/cli.js reweight --fund 11479 --set "S4=11,S2=8,S40=6,S108=8,S5=11,S13=5,S687=8,S6=5,S3=5,S15=5,S27=5" --dry-run
+node dist/cli.js --help
 ```
 
 Global flags: `--json`, `--token <jwt>`, `--cookie <c>`, `--no-browser`, `--port <n>`, `--refresh`.
@@ -76,22 +86,66 @@ the FT session cannot be extended server-side, so:
 - The cookie is cached in `~/.config/stockgame/session.json` on first use.
 - After that, **every run renews the JWT by itself** — cached cookie →
   `initialize` → fresh 7-day JWT — with **zero browser involvement**.
-- `--no-browser` (or `STOCKGAME_NO_BROWSER=1`) enforces this: the CLI will never
-  open a DevTools connection or read a browser profile, and fails loudly instead.
+- `--no-browser` (or `STOCKGAME_NO_BROWSER=1`) enforces this: the CLI never opens a
+  DevTools connection and fails loudly instead.
 - The browser is only needed to **bootstrap** a cookie (once) or after the FT
   session itself expires (`rememberMe` sessions last ~6 months; your `expiryTime`
   is returned by `session-next.ft.com`).
 
-Bootstrap options, in order of preference:
+Bootstrap options:
 
 1. `--cookie "FTSession_s=..."` — paste it once; nothing else ever touches a browser.
 2. A browser started with `--remote-debugging-port=9222` (read over DevTools).
-3. A local Chrome/Helium/Edge/Brave profile (decrypted directly from its cookie
-   store with DPAPI — works while the browser is **closed**, no DevTools needed).
 
 So the practical answer to "can it refresh by itself?": **yes** — one cached cookie
 keeps the CLI self-sufficient for the lifetime of the FT session.
 
+---
+
+## HTTP + MCP server
+
+The same core is served by a [Hono](https://hono.dev) app.
+
+```bash
+node dist/cli.js serve --host 127.0.0.1 --port 8787
+# or: npm run serve            (via tsx)
+# or: STOCKGAME_PORT=8787 node dist/server/serve.js
+```
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/health` | liveness + version |
+| POST | `/mcp` | MCP JSON-RPC (Streamable HTTP; mints `Mcp-Session-Id`) |
+| GET | `/mcp` | SSE stream (server → client keep-alive) |
+| DELETE | `/mcp` | end an MCP session |
+
+Server flags: `--host`, `--port`, `--cookie`, `--token`, `--no-browser`, `--devtools-port`
+(or `STOCKGAME_HOST` / `STOCKGAME_PORT` / `STOCKGAME_COOKIE` / `STOCKGAME_TOKEN`).
+
+### MCP tools (26)
+
+- **Read**: `whoami`, `portfolio`, `list_leagues`, `league_details`, `player_profile`,
+  `search_players`, `activity_feed`, `stock_universe`, `list_negotiations`
+- **Write**: `save_picks` (rule-validated, supports `dryRun`), `cancel_reweight`,
+  `follow`, `unfollow`, `create_league`, `delete_league` (needs `confirm`),
+  `join_league`, `leave_league`, `request_join`, `reject_invite`, `cancel_request`,
+  `league_invite`, `league_join`, `league_reject`, `league_reset`, `negotiate`
+- **Escape hatch**: `raw_request`
+
+### Connect an MCP client
+
+```bash
+# Claude Code
+claude mcp add --transport http stockgame http://127.0.0.1:8787/mcp
+```
+
+```jsonc
+// generic Streamable HTTP MCP client config
+{ "mcpServers": { "stockgame": { "type": "http", "url": "http://127.0.0.1:8787/mcp" } } }
+```
+
+The server authenticates lazily on the first tool call using the same session model
+(cached cookie → JWT), so `--no-browser` applies here too.
 
 ---
 
@@ -234,22 +288,26 @@ Season: soft launch 2026-09-21, hard launch 2026-10-05, end 2026-11-27.
 | `player <pid>`, `activity` | player page, activity feed |
 | `follow` / `unfollow` | follow buttons |
 | `stocks` | tradable instrument universe |
+| `serve` | run the HTTP + MCP server |
 | `raw <path>` | any endpoint (escape hatch) |
 
-### Not implemented (endpoint exists in `src/api.js`, not wired to a command)
+Everything above is also available over MCP (`tools/call`), and MCP additionally
+exposes `search_players`, which has no CLI command yet.
 
-- `searchplayerfund` — global player/portfolio search (`search`)
-- `PlayerBadges` — badges (`badges`)
+### Not wired to a CLI command (endpoint exists in `src/api.ts`)
+
+- `PlayerBadges` — badges (available as nothing yet; use `raw`)
 - `official-leagues`
-- `historical-fund-performance` — historical chart (`history`)
+- `historical-fund-performance` — historical chart
 - `GetFundNegotiations` — fund-side negotiation list
 - `league-search-to-invite` — owner invite search
 - `LeagueNegotiateDecision` — league-side decision (only fund side exposed)
 - `CreateFund` — creating a second fund
 - `DeleteSelf` — delete the player
-- `RegisterPlayerWithFund` — sign-up flow (`signup`)
+- `RegisterPlayerWithFund` — sign-up flow
+- `searchplayerfund` — **available as the MCP tool `search_players`**, no CLI command
 
-All of these can still be called today via `raw`.
+All of these can still be called today via `raw` (CLI) or `raw_request` (MCP).
 
 ### Not supported (separate systems, not in this API)
 

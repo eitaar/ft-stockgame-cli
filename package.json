@@ -1,18 +1,38 @@
 {
-  "name": "stockgame-cli",
-  "version": "1.0.0",
-  "description": "CLI client for the FT Stock Picking Game (fantasy.norkon.net) — drives the same operations as the web GUI.",
+  "name": "ft-stockgame-cli",
+  "version": "2.0.0",
+  "description": "CLI + Hono HTTP/MCP server for the FT Stock Picking Game (unofficial, reverse-engineered).",
   "type": "module",
   "bin": {
-    "stockgame": "./src/cli.js"
+    "stockgame": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./server": "./dist/server/serve.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "bun": ">=1.1",
+    "deno": ">=2"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "start": "node ./src/cli.js"
+    "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "serve": "tsx src/server/serve.ts",
+    "start": "node dist/server/serve.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "@hono/node-server": "^1.14.0",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }
