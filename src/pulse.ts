@@ -1,7 +1,6 @@
 import type { FundState } from './types.js';
 
 export const WS_BASE = 'wss://api.ft-s02-prod.fantasy.norkon.net/Pulse/';
-export const ORIGIN = 'https://stockpickinggame.ft.com';
 
 interface PulseArgs {
   area: string;
@@ -35,7 +34,7 @@ export function pulseRequest(
   { timeoutMs = 15000 }: { timeoutMs?: number } = {},
 ): Promise<PulseResponse> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(WS_BASE, { headers: { Origin: ORIGIN } } as never);
+    const ws = new WebSocket(WS_BASE);
     const seq = 1000;
     const timer = setTimeout(() => {
       try {
