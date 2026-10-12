@@ -164,14 +164,48 @@ npx wrangler secret put STOCKGAME_MCP_TOKEN   # bearer gate for /mcp (recommende
 npx wrangler deploy
 ```
 
-Local run on the real Workers runtime (workerd): put the two values in `.dev.vars`
+Local run on the real Workers runtime (workerd): put the values in `.dev.vars`
 (git-ignored) and run `npm run dev:worker`.
 
-Then point an MCP client / ChatGPT connector at
-`https://<worker>.<account>.workers.dev/mcp` with `Authorization: Bearer <token>`.
+### Authenticating MCP clients
 
-> Anyone with the URL **and** the token can act on your account. Keep the token secret,
-> and rotate `STOCKGAME_COOKIE` when `session-next.ft.com` reports your session expired.
+Two options. One is strongly recommended once the URL is public.
+
+**1. Static bearer** — for clients that can set a header (Claude Code, Codex, Cursor):
+
+```bash
+npx wrangler secret put STOCKGAME_MCP_TOKEN
+# client sends: Authorization: Bearer <token>
+```
+
+**2. OAuth 2.1** — required by clients whose UI only offers OAuth (e.g. a ChatGPT
+connector). Minimal and **stateless** (HMAC-signed tokens, so still no KV):
+
+```bash
+npx wrangler secret put STOCKGAME_OAUTH_SECRET    # HMAC key for tokens
+npx wrangler secret put STOCKGAME_OAUTH_PASSWORD  # password you type on the consent page
+```
+(both fall back to `STOCKGAME_MCP_TOKEN` when unset.)
+
+Endpoints exposed when OAuth is enabled:
+
+| Path | Purpose |
+| --- | --- |
+| `/.well-known/oauth-protected-resource` | resource metadata (also `/mcp`-suffixed) |
+| `/.well-known/oauth-authorization-server` | AS metadata (+ `/openid-configuration`) |
+| `POST /oauth/register` | dynamic client registration (RFC 7591) |
+| `GET` / `POST /oauth/authorize` | consent page — enter `STOCKGAME_OAUTH_PASSWORD` to approve |
+| `POST /oauth/token` | `authorization_code` + PKCE (S256) and `refresh_token` grants |
+
+An unauthorised `/mcp` request is answered with
+`WWW-Authenticate: Bearer resource_metadata="…"` so an OAuth-capable client can discover
+the flow; the consent page is the only gate, so only the owner can mint a token.
+
+Then register the connector/URL `https://<worker>.<account>.workers.dev/mcp`.
+
+> Anyone with the URL **and** a usable token (or your consent password) can act on your
+> account. Keep the secrets out of git and rotate `STOCKGAME_COOKIE` when
+> `session-next.ft.com` reports your session expired.
 
 ---
 

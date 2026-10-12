@@ -6,8 +6,11 @@ compatibility_date = "2025-09-01"
 # memoised in isolate memory.
 #
 # Provision the secrets (never commit them):
-#   wrangler secret put STOCKGAME_COOKIE      # "FTSession_s=..." from your browser
-#   wrangler secret put STOCKGAME_MCP_TOKEN   # optional bearer gate for /mcp
+#   wrangler secret put STOCKGAME_COOKIE           # "FTSession_s=..." from your browser
+#   wrangler secret put STOCKGAME_MCP_TOKEN        # optional static bearer gate for /mcp
+#   wrangler secret put STOCKGAME_OAUTH_SECRET     # optional: HMAC key for OAuth tokens
+#   wrangler secret put STOCKGAME_OAUTH_PASSWORD   # optional: OAuth consent-page password
+#     (both OAuth secrets fall back to STOCKGAME_MCP_TOKEN)
 #
 # Deploy:
 #   npx wrangler deploy

@@ -27,11 +27,16 @@ export interface RunningServer {
  */
 export async function startServer(opts: ServeOptions): Promise<RunningServer> {
   const devtoolsPort = opts.devtoolsPort ?? 9222;
+  const oauthSecret = process.env.STOCKGAME_OAUTH_SECRET ?? opts.token;
+  const oauthPassword = process.env.STOCKGAME_OAUTH_PASSWORD ?? opts.token;
   const app = createApp({
     store: new FileSessionStore(),
     cookieSource: async () =>
       opts.allowBrowser === false ? null : await ftsessionCookie(devtoolsPort).catch(() => null),
     transport: pulseViaSocket,
+    requireToken: opts.token,
+    oauth:
+      oauthSecret && oauthPassword ? { secret: oauthSecret, password: oauthPassword } : undefined,
   });
 
   const url = `http://${opts.host}:${opts.port}`;

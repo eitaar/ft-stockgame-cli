@@ -139,6 +139,11 @@ node dist/node/cli.js serve --host 127.0.0.1 --port 8787
   `wrangler.toml`. Set the `STOCKGAME_COOKIE` secret (the `FTSession_s` value) and
   optionally `STOCKGAME_MCP_TOKEN`; `npx wrangler deploy`. No KV needed — the JWT is
   memoised in isolate memory and the feed uses the HTTP Pulse endpoint.
+- **Client auth**: `/mcp` accepts a static bearer (`STOCKGAME_MCP_TOKEN`) and, when
+  `STOCKGAME_OAUTH_SECRET`/`STOCKGAME_OAUTH_PASSWORD` are set, a minimal stateless
+  OAuth 2.1 flow (protected-resource metadata, DCR, PKCE, consent page). Use the
+  OAuth path for clients whose UI only offers OAuth (e.g. a ChatGPT connector); a
+  client that can send `Authorization: Bearer <token>` can just use the static token.
 
 ## Safety rules
 
