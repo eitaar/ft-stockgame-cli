@@ -2,6 +2,11 @@ name = "ft-stockgame"
 main = "src/worker.ts"
 compatibility_date = "2025-09-01"
 
+# Serve on the workers.dev URL, and do NOT expose preview URLs (they would run with
+# preview-env secrets, where the bearer/OAuth gate may be unset).
+workers_dev = true
+preview_urls = false
+
 # No KV / Durable Objects needed: the FT cookie comes from a secret and the JWT is
 # memoised in isolate memory.
 #
