@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# tooling config
+.commandcode/
+
+# secrets / local session (never commit these)
+.config/
+*.session.json
+session.json
+.env
+.env.*
+
+# logs & scratch
+*.log
+scratch/
+tmp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

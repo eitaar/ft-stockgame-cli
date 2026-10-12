@@ -1,0 +1,249 @@
+# ft-stockgame-cli
+
+A CLI + agent skill for the **FT Stock Picking Game**
+(`https://stockpickinggame.ft.com/`) — it drives the game's backend directly so
+you can do the same things the web GUI does without clicking through the site,
+and it doubles as a skill that teaches coding agents how to use it.
+
+It reuses the session of a browser you are **already logged into**. No password
+is ever handled or stored in plain text by the tool.
+
+---
+
+## Disclaimer
+
+- **Unofficial / not affiliated.** This project is not made by, endorsed by, or
+  connected to the Financial Times or Norkon Fantasy Funds. All trademarks belong
+  to their owners.
+- **Reverse-engineered.** The client talks to private, undocumented endpoints that
+  were derived by inspecting the public site. They can change or disappear at any
+  time and **will break this tool**.
+- **Personal / educational use.** Use it only with your own account, at your own
+  risk. Automated access may violate the site's terms of service — you are
+  responsible for how you use it.
+- **Writes are real.** Commands like `reweight` and `delete-league` change your
+  actual game state. There is no undo from the tool.
+- **No warranty.** Provided as-is, without any warranty of correctness or fitness.
+- **Keep credentials out of git.** `~/.config/stockgame/session.json` holds a
+  session cookie + JWT. It lives outside the repo and is git-ignored.
+
+---
+
+## Requirements
+
+- Node.js >= 22 (uses built-in `fetch`/`WebSocket`; the only dependency is `ws`).
+- A Chromium-family browser (tested with **Helium**) where you are logged in to
+  `ft.com`, started with remote debugging enabled.
+
+### Enabling remote debugging
+
+Close the browser, then relaunch it with a debug port. Your login persists.
+
+```powershell
+# Windows example (Helium)
+& "C:\Program Files\imput\Helium\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+Check it: <http://127.0.0.1:9222/json/version> should return JSON.
+
+## Install
+
+```bash
+npm install
+npm link            # optional: exposes the `stockgame` command
+```
+
+## Usage
+
+```bash
+node src/cli.js whoami          # pulls the session from the browser on :9222
+node src/cli.js portfolio       # live value, picks, scheduled trades, exposure
+node src/cli.js leagues         # your leagues
+node src/cli.js league 640      # league page, funds, returns, history
+node src/cli.js stocks --search nvidia
+node src/cli.js reweight --fund 11479 --set "S4=11,S2=8,S40=6,S108=8,S5=11,S13=5,S687=8,S6=5,S3=5,S15=5,S27=5,S2=8" --dry-run
+node src/cli.js --help
+```
+
+Global flags: `--json`, `--token <jwt>`, `--cookie <c>`, `--port <n>`, `--refresh`.
+
+---
+
+## How it works
+
+The site is a Nuxt SPA backed by Norkon Fantasy Funds. Three mechanisms matter:
+
+1. **Auth.** `GET /api/v1/user/initialize` is called with the FT session cookie
+   (`FTSession_s`) and returns a short-lived JWT. Every other call sends
+   `Authorization: Bearer <jwt>`.
+2. **REST API** for leagues, funds, players and picks.
+3. **Realtime (websocket)** for private fund state — current picks, scheduled
+   picks, value and ticks are **not** served over REST. The app subscribes on
+   `wss://api.ft-s02-prod.fantasy.norkon.net/Pulse/`.
+
+The CLI obtains the FT cookie either from a running Chromium browser over the
+DevTools protocol (`Storage.getCookies`), from `--cookie`, or from a cached JWT.
+
+### Base URLs
+
+| Thing | Value |
+| --- | --- |
+| Site | `https://stockpickinggame.ft.com/` |
+| API base | `https://api.ft-s02-prod.fantasy.norkon.net/api/` |
+| Realtime base | `wss://api.ft-s02-prod.fantasy.norkon.net/Pulse/` |
+| Session refresh | `https://session-next.ft.com/sessions/s/<FTSession_s>` |
+
+---
+
+## API specification
+
+All REST calls accept/return JSON. `result` wraps successful payloads
+(`{"success":true,"result":...}`).
+
+### Auth
+
+| Method | Path | Body | Notes |
+| --- | --- | --- | --- |
+| GET | `/v1/user/initialize` | – | Needs `Cookie: FTSession_s=...`. Returns `{ result: { jwtToken } }` or `{ result: null }` when logged out. JWT payload: `{ extId, uid, isB2b, isB2c, exp }` (~7 days). |
+
+### Reads
+
+| Method | Path | Returns |
+| --- | --- | --- |
+| GET | `/fantasyfunds/userdata` | `{ active, userId, player:{id,name,confirmed,followers}, secret, funds:[[fid,fname,active,[[lid,lname]]]] }` |
+| GET | `/FantasyFunds/GetLeagues` | `[[lid, lname, a, b], ...]` |
+| GET | `/FantasyFunds/GetLeaguePage?leagueId=` | `{ owned, canJoin, canLeave, lname, negs? }` |
+| GET | `/FantasyFunds/LeagueFundList?leagueId=` | `{ name, funds:[[fid,fname,active,pid,pname]], ress:{ fid: value } }` |
+| GET | `/FantasyFunds/leaguefundresultlist?leagueId=` | Per-fund returns, positions, top history. |
+| GET | `/FantasyFunds/PlayerData/{pid}` | `{ player, followers[], following[], activity[], funds[] }` |
+| GET | `/FantasyFunds/PlayerBadges?playerId=` | Badge events + totals. |
+| GET | `/FantasyFunds/searchplayerfund?term=` | `[{ pid, pname, funds:[{fid,fname}] }]` |
+| GET | `/FantasyFunds/GetFundNegotiations?fundId=` | Negotiations for a fund. |
+| GET | `/FantasyFunds/PrivateActivity` | Private activity feed. |
+| GET | `/FantasyFunds/new-negs/player-meta` | Player's funds + league memberships. |
+| GET | `/FantasyFunds/new-negs/player-negotiations` | Pending negotiations (player side). |
+| GET | `/FantasyFunds/new-negs/league-negotiations?lid=` | Negotiations for a league (owner side). |
+| GET | `/FantasyFunds/new-negs/league-search-to-invite?lid=&term=` | Fund search to invite. |
+| GET | `/official-leagues` | Official leagues (often `[]`). |
+| GET | `/v1/invest-hubs/overview` | `{ utcTimestamp, exchanges{}, stocks{}, etfs? }` — the instrument universe. |
+| GET | `/FantasyFunds/GetAllTradedStocks` | `{ eid: true, ... }` — which instruments are tradable. |
+| GET | `/FantasyFunds/historical-fund-performance?fid=` | Historical series (may be `null`). |
+
+### Writes (POST, JSON)
+
+| Path | Body | Does |
+| --- | --- | --- |
+| `/FantasyFunds/CreateLeague` | `{ leagueName }` | Create league → returns new `leagueId`. |
+| `/FantasyFunds/DeleteLeague` | `{ leagueId }` | Delete a league you own. |
+| `/FantasyFunds/LeaveLeague` | `{ leagueId, fundId }` | Leave a league. |
+| `/FantasyFunds/CreateFund` | `{ fundName, orderMapStr }` | Create another fund. |
+| `/FantasyFunds/RegisterPlayerWithFund` | `{ registrationDataStr, orderMapStr }` | Sign up: player + fund + initial picks. |
+| `/FantasyFunds/DeleteSelf` | `{}` | Delete your player. |
+| `/FantasyFunds/Follow` | `{ playerId }` | Follow a player. |
+| `/FantasyFunds/Unfollow` | `{ playerId }` | Unfollow. |
+| `/FantasyFunds/ReweighSelectedFund/` | `{ fundId, order }` | Save picks. `order` = `{ eid: pct }`; executes at the next market open. |
+| `/FantasyFunds/CancelReweighSelectedFund` | `{ fundId }` | Cancel a scheduled reweight. |
+| `/FantasyFunds/FundNegotiateDecision` | `{ leagueId, fundId, accept }` | Fund side of a negotiation. |
+| `/FantasyFunds/LeagueNegotiateDecision` | `{ leagueId, fundId, accept }` | League side of a negotiation. |
+| `/FantasyFunds/new-negs/do-fund-join-league?fid=&lid=` | – | Join an open league. |
+| `/FantasyFunds/new-negs/do-fund-request-to-join-league?fid=&lid=` | – | Request to join a private league. |
+| `/FantasyFunds/new-negs/do-fund-leave-league?fid=&lid=` | – | Leave. |
+| `/FantasyFunds/new-negs/do-fund-reject-invite?fid=&lid=` | – | Reject an invite. |
+| `/FantasyFunds/new-negs/do-fund-cancel-request-to-join?fid=&lid=` | – | Cancel a join request. |
+| `/FantasyFunds/new-negs/do-league-invite-fund?fid=&lid=` | – | Owner invites a fund. |
+| `/FantasyFunds/new-negs/do-league-join-fund?fid=&lid=` | – | Owner accepts a fund. |
+| `/FantasyFunds/new-negs/do-league-reject-fund?fid=&lid=` | – | Owner rejects a fund. |
+| `/FantasyFunds/new-negs/do-league-reset-decision?fid=&lid=` | – | Owner resets a decision. |
+
+`orderMapStr` / `order` is always a map of instrument key → percent, e.g.
+`{"S4":11,"S2":8}` (the `S<n>` keys come from `invest-hubs/overview`).
+
+### Realtime (websocket)
+
+Connect to `wss://api.ft-s02-prod.fantasy.norkon.net/Pulse/` (note the `/Pulse/`
+suffix) with `Origin: https://stockpickinggame.ft.com`, then send one manage
+message and read the response:
+
+```jsonc
+// send
+{"seq":1000,"d":{
+  "_t":"investHubs",
+  "subscribe":[{"hub":"ff","area":"ff",
+                "args":{"_t":"fund","fid":11479,"secret":"<userdata.secret>"}}],
+  "queries":[], "unsubscribe":["ff"]}}
+
+// receive
+{"seqres":1000,"d":{"subscribed":[{"result":{
+  "_v":40241, "v":98366.81, "b":98784.76, "reweighed":true,
+  "order":{"S4":11,"S2":8}, "next_opt":{...}, "sellList":{},
+  "sState":{ "S4":[11,-0.00137] }, "aState":{ "sellRatio":1.0, "holds":{...} },
+  "ticks":[[epoch,rel],...], "history":[], "pcts":{...}, "pos":[[rank,of]] }}]}}
+```
+
+`order` = current picks, `next_opt` = scheduled picks, `v` = value, `b` = base.
+
+### Game rules (from the bundle)
+
+`initialMoney 100000`, picks 5–20, each 5–25 %, invested 75–100 %.
+Season: soft launch 2026-09-21, hard launch 2026-10-05, end 2026-11-27.
+
+---
+
+## Command coverage
+
+### Implemented
+
+| Command | GUI equivalent |
+| --- | --- |
+| `auth` / `login` / `logout` / `config` | session handling |
+| `whoami` | account / profile |
+| `portfolio` (`funds`) | Overview + My portfolio (live) |
+| `reweight` / `save` | My portfolio → Save |
+| `cancel-reweight` | cancel scheduled reweight |
+| `leagues`, `league <lid>` | Leagues, league page |
+| `create-league`, `delete-league` | create / delete league |
+| `fund-join` / `fund-request` / `fund-leave` / `fund-reject` / `fund-cancel` | join / request / leave / invite responses |
+| `league-invite` / `league-join` / `league-reject` / `league-reset` | owner fund management |
+| `negotiate` | fund-side negotiation decision |
+| `player <pid>`, `activity` | player page, activity feed |
+| `follow` / `unfollow` | follow buttons |
+| `stocks` | tradable instrument universe |
+| `raw <path>` | any endpoint (escape hatch) |
+
+### Not implemented (endpoint exists in `src/api.js`, not wired to a command)
+
+- `searchplayerfund` — global player/portfolio search (`search`)
+- `PlayerBadges` — badges (`badges`)
+- `official-leagues`
+- `historical-fund-performance` — historical chart (`history`)
+- `GetFundNegotiations` — fund-side negotiation list
+- `league-search-to-invite` — owner invite search
+- `LeagueNegotiateDecision` — league-side decision (only fund side exposed)
+- `CreateFund` — creating a second fund
+- `DeleteSelf` — delete the player
+- `RegisterPlayerWithFund` — sign-up flow (`signup`)
+
+All of these can still be called today via `raw`.
+
+### Not supported (separate systems, not in this API)
+
+- Static content pages: Prize, How to play, Terms (CMS blocks)
+- FT editorial / news feed
+- Market movers & AI stock suggestions (separate `beakon` service)
+- Full live market stream for every instrument
+- Client-only state: theme (light/dark), cookie-consent banners
+
+---
+
+## Agent skill
+
+`skills/ft-stockgame-cli/SKILL.md` is an installable skill (skills.sh format) that
+teaches an agent when and how to use the CLI. Install from a published repo with:
+
+```bash
+npx skills add <owner>/ft-stockgame-cli
+```
+
+## License
+
+MIT — see [LICENSE](./LICENSE). The disclaimer above always applies.
