@@ -20,8 +20,8 @@ It reuses the session of the browser the user is **already logged into**, so the
 is no login step and no password handling.
 
 Repo/package: `ft-stockgame-cli` (TypeScript; builds to `dist/`). Entry points:
-`node dist/cli.js <command>` for the CLI, `node dist/server/serve.js` for the
-HTTP + MCP server.
+`node dist/node/cli.js <command>` for the CLI, `node dist/node/serve.js` for the
+HTTP + MCP server, `src/worker.ts` for the Cloudflare Workers deployment.
 
 > Unofficial and reverse-engineered: not affiliated with the FT or Norkon. Endpoints
 > can change without notice. Writes change the user's **real** game state.
@@ -50,7 +50,7 @@ Always start here. This proves the session works and prints the account context
 (player id, fund id, secret):
 
 ```bash
-node dist/cli.js whoami
+node dist/node/cli.js whoami
 ```
 
 - It tries, in order: `--token`, a cached JWT, a cached FT cookie, the browser on
@@ -59,7 +59,7 @@ node dist/cli.js whoami
 - The per-account `secret` printed here is required for the realtime feed.
 - Flags for any command: `--json`, `--token <jwt>`, `--cookie <c>`, `--no-browser`,
   `--port <n>`.
-- `node dist/cli.js auth --refresh` forces a fresh token. Refreshing is self-contained:
+- `node dist/node/cli.js auth --refresh` forces a fresh token. Refreshing is self-contained:
   once one FT cookie is cached, the CLI renews the JWT with no browser involved.
   Use `--no-browser` (or `STOCKGAME_NO_BROWSER=1`) to guarantee it never touches a
   browser — handy for headless / CI use.
@@ -67,16 +67,16 @@ node dist/cli.js whoami
 ## Core reads
 
 ```bash
-node dist/cli.js portfolio                 # fund value, picks w/ names, day change,
+node dist/node/cli.js portfolio                 # fund value, picks w/ names, day change,
                                           # scheduled (next-open) trades, exposure
-node dist/cli.js leagues                   # leagues you are in
-node dist/cli.js leagues --all             # every league
-node dist/cli.js league <lid>              # league page, member funds, returns, history
-node dist/cli.js player <pid>              # profile, followers/following, activity
-node dist/cli.js activity                  # private activity feed
-node dist/cli.js stocks --search <text>    # tradable instruments (eid/ticker/name)
-node dist/cli.js invites                   # pending negotiations
-node dist/cli.js requests <lid>            # negotiations for a league you own
+node dist/node/cli.js leagues                   # leagues you are in
+node dist/node/cli.js leagues --all             # every league
+node dist/node/cli.js league <lid>              # league page, member funds, returns, history
+node dist/node/cli.js player <pid>              # profile, followers/following, activity
+node dist/node/cli.js activity                  # private activity feed
+node dist/node/cli.js stocks --search <text>    # tradable instruments (eid/ticker/name)
+node dist/node/cli.js invites                   # pending negotiations
+node dist/node/cli.js requests <lid>            # negotiations for a league you own
 ```
 
 `portfolio` shows both `order` (current) and `next_opt` (scheduled) so you can see
@@ -89,13 +89,13 @@ e.g. `{"S4":11,"S2":8}`; keys come from `stocks`/`portfolio`.
 
 ```bash
 # validate without sending (ALWAYS dry-run first)
-node dist/cli.js reweight --fund <fid> --set "S4=11,S2=8,S40=6,S108=8,S5=11" --dry-run
+node dist/node/cli.js reweight --fund <fid> --set "S4=11,S2=8,S40=6,S108=8,S5=11" --dry-run
 
 # then save
-node dist/cli.js reweight --fund <fid> --set "S4=11,S2=8,S40=6,S108=8,S5=11"
-node dist/cli.js reweight --fund <fid> --file picks.json     # {eid:pct,...}
-node dist/cli.js reweight --fund <fid> --current              # re-save current picks
-node dist/cli.js cancel-reweight --fund <fid>
+node dist/node/cli.js reweight --fund <fid> --set "S4=11,S2=8,S40=6,S108=8,S5=11"
+node dist/node/cli.js reweight --fund <fid> --file picks.json     # {eid:pct,...}
+node dist/node/cli.js reweight --fund <fid> --current              # re-save current picks
+node dist/node/cli.js cancel-reweight --fund <fid>
 ```
 
 The tool enforces the game rules (picks 5–20, each 5–25 %, invested 75–100 %) and
@@ -110,7 +110,7 @@ Other writes: `follow`/`unfollow <pid>`, `create-league <name>`,
 ## Escape hatch
 
 Any endpoint not surfaced as a command can be called directly. Run
-`node dist/cli.js raw <path> [--method POST] [--data '<json>']`, e.g.
+`node dist/node/cli.js raw <path> [--method POST] [--data '<json>']`, e.g.
 `raw "FantasyFunds/searchplayerfund?term=<name>"`. See the repo README for the full
 endpoint list and payloads.
 
@@ -120,7 +120,7 @@ Instead of shelling out to the CLI, prefer the built-in **MCP server** when the
 client can speak MCP. It exposes the same operations as tools.
 
 ```bash
-node dist/cli.js serve --host 127.0.0.1 --port 8787
+node dist/node/cli.js serve --host 127.0.0.1 --port 8787
 # Streamable HTTP MCP endpoint: http://127.0.0.1:8787/mcp
 ```
 
@@ -135,6 +135,10 @@ node dist/cli.js serve --host 127.0.0.1 --port 8787
 - `save_picks` takes `{ fund?, order, dryRun?, allowInvalid? }` and enforces the
   picker rules; `delete_league` requires `confirm: true`.
 - It authenticates lazily on the first tool call and honours `--no-browser`.
+- **Cloudflare Workers**: the same app is deployed from `src/worker.ts` +
+  `wrangler.toml`. Set the `STOCKGAME_COOKIE` secret (the `FTSession_s` value) and
+  optionally `STOCKGAME_MCP_TOKEN`; `npx wrangler deploy`. No KV needed — the JWT is
+  memoised in isolate memory and the feed uses the HTTP Pulse endpoint.
 
 ## Safety rules
 
@@ -149,5 +153,5 @@ node dist/cli.js serve --host 127.0.0.1 --port 8787
 
 ## Reference
 
-`node dist/cli.js --help` lists every command. The repo README documents the REST
+`node dist/node/cli.js --help` lists every command. The repo README documents the REST
 API, the MCP tools, and the `Pulse` websocket protocol this project relies on.

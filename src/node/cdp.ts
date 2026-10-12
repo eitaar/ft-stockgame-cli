@@ -1,8 +1,7 @@
 /**
  * Talk to a Chromium-family browser started with `--remote-debugging-port=<port>`
- * and pull the FT session cookie out of it. This is what lets the CLI reuse the
- * already-logged-in browser session. Uses the global WebSocket, so it runs on
- * Node, Bun and Deno alike.
+ * and pull the FT session cookie out of it. Node/Bun/Deno only (Workers has no
+ * local browser, so there the cookie comes from a secret instead).
  */
 
 export interface BrowserCookie {

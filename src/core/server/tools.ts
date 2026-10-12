@@ -1,10 +1,12 @@
 import type { Api } from '../api.js';
-import { fundState } from '../pulse.js';
+import type { PulseTransport } from '../pulse.js';
 import { validateOrder, type Order } from '../rules.js';
 
 export interface ToolContext {
   /** Resolve (and cache) an authenticated API client for this server process. */
   api: () => Promise<Api>;
+  /** Read a fund's live state (HTTP on Workers, WS on Node). */
+  transport: PulseTransport;
 }
 
 export interface ToolDef {
@@ -37,7 +39,7 @@ export const tools: ToolDef[] = [
   {
     name: 'portfolio',
     description:
-      "Live fund state: current value, base, current picks (instrument -> percent), scheduled picks, per-pick day change, and position.",
+      'Live fund state: current value, base, current picks (instrument -> percent), scheduled picks, per-pick day change, and position.',
     inputSchema: {
       type: 'object',
       properties: { fund: { type: 'number', description: 'fund id (defaults to the first fund)' } },
@@ -46,13 +48,20 @@ export const tools: ToolDef[] = [
     handler: async (ctx, args) => {
       const api = await ctx.api();
       const { user, fid, secret } = await resolveFund(api, args.fund);
-      const [state, universe] = await Promise.all([fundState(fid, secret), api.universe()]);
-      const byEid = (eid: string) => Object.values(universe.overview.stocks).find((s) => s.eid === eid) ?? null;
+      const [state, universe] = await Promise.all([ctx.transport.fetchFund(fid, secret), api.universe()]);
+      const byEid = (eid: string) =>
+        Object.values(universe.overview.stocks).find((s) => s.eid === eid) ?? null;
       const picks = Object.entries(state.order ?? {})
         .sort((a, b) => b[1] - a[1])
         .map(([eid, pct]) => {
           const s = byEid(eid);
-          return { eid, ticker: s?.ticker ?? eid, name: s?.displayName ?? '', alloc: pct, dayChange: state.sState?.[eid]?.[1] ?? null };
+          return {
+            eid,
+            ticker: s?.ticker ?? eid,
+            name: s?.displayName ?? '',
+            alloc: pct,
+            dayChange: state.sState?.[eid]?.[1] ?? null,
+          };
         });
       return {
         fid,
@@ -146,7 +155,9 @@ export const tools: ToolDef[] = [
       let stocks = Object.values(overview.stocks).filter((s) => traded[s.eid]);
       if (args.search) {
         const q = String(args.search).toLowerCase();
-        stocks = stocks.filter((s) => s.ticker.toLowerCase().includes(q) || s.displayName.toLowerCase().includes(q));
+        stocks = stocks.filter(
+          (s) => s.ticker.toLowerCase().includes(q) || s.displayName.toLowerCase().includes(q),
+        );
       }
       return stocks;
     },
@@ -353,11 +364,7 @@ export const tools: ToolDef[] = [
     description: 'Decide a fund<->league negotiation as the fund.',
     inputSchema: {
       type: 'object',
-      properties: {
-        league: { type: 'number' },
-        fund: { type: 'number' },
-        accept: { type: 'boolean' },
-      },
+      properties: { league: { type: 'number' }, fund: { type: 'number' }, accept: { type: 'boolean' } },
       required: ['league', 'fund', 'accept'],
       additionalProperties: false,
     },

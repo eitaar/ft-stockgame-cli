@@ -66,13 +66,13 @@ Run without building, via tsx: `npm run dev -- whoami`.
 ## Usage (CLI)
 
 ```bash
-node dist/cli.js whoami          # pulls the session from the browser on :9222
-node dist/cli.js portfolio       # live value, picks, scheduled trades, exposure
-node dist/cli.js leagues         # your leagues
-node dist/cli.js league 640      # league page, funds, returns, history
-node dist/cli.js stocks --search nvidia
-node dist/cli.js reweight --fund 11479 --set "S4=11,S2=8,S40=6,S108=8,S5=11,S13=5,S687=8,S6=5,S3=5,S15=5,S27=5" --dry-run
-node dist/cli.js --help
+node dist/node/cli.js whoami          # pulls the session from the browser on :9222
+node dist/node/cli.js portfolio       # live value, picks, scheduled trades, exposure
+node dist/node/cli.js leagues         # your leagues
+node dist/node/cli.js league 640      # league page, funds, returns, history
+node dist/node/cli.js stocks --search nvidia
+node dist/node/cli.js reweight --fund 11479 --set "S4=11,S2=8,S40=6,S108=8,S5=11,S13=5,S687=8,S6=5,S3=5,S15=5,S27=5" --dry-run
+node dist/node/cli.js --help
 ```
 
 Global flags: `--json`, `--token <jwt>`, `--cookie <c>`, `--no-browser`, `--port <n>`, `--refresh`.
@@ -107,7 +107,7 @@ keeps the CLI self-sufficient for the lifetime of the FT session.
 The same core is served by a [Hono](https://hono.dev) app.
 
 ```bash
-node dist/cli.js serve --host 127.0.0.1 --port 8787
+node dist/node/cli.js serve --host 127.0.0.1 --port 8787
 # or: npm run serve            (via tsx)
 # or: STOCKGAME_PORT=8787 node dist/server/serve.js
 ```
@@ -147,6 +147,32 @@ claude mcp add --transport http stockgame http://127.0.0.1:8787/mcp
 The server authenticates lazily on the first tool call using the same session model
 (cached cookie → JWT), so `--no-browser` applies here too.
 
+### Deploy to Cloudflare Workers
+
+The Worker entry (`src/worker.ts`) serves the same Hono app. Workers has no filesystem
+and no browser, so:
+
+- the FT cookie is a **secret** (`STOCKGAME_COOKIE`) — copy `FTSession_s=...` from your
+  logged-in browser once, and rotate it when the FT session expires (~6 months);
+- the JWT is memoised in isolate memory — **no KV and no Durable Objects needed**;
+- the realtime feed uses the **plain-HTTP Pulse endpoint** (`POST /Pulse/Request/`), so
+  no websocket is required (and Workers can't use `new WebSocket()` anyway).
+
+```bash
+npx wrangler secret put STOCKGAME_COOKIE      # "FTSession_s=..."
+npx wrangler secret put STOCKGAME_MCP_TOKEN   # bearer gate for /mcp (recommended)
+npx wrangler deploy
+```
+
+Local run on the real Workers runtime (workerd): put the two values in `.dev.vars`
+(git-ignored) and run `npm run dev:worker`.
+
+Then point an MCP client / ChatGPT connector at
+`https://<worker>.<account>.workers.dev/mcp` with `Authorization: Bearer <token>`.
+
+> Anyone with the URL **and** the token can act on your account. Keep the token secret,
+> and rotate `STOCKGAME_COOKIE` when `session-next.ft.com` reports your session expired.
+
 ---
 
 ## How it works
@@ -157,9 +183,11 @@ The site is a Nuxt SPA backed by Norkon Fantasy Funds. Three mechanisms matter:
    (`FTSession_s`) and returns a short-lived JWT. Every other call sends
    `Authorization: Bearer <jwt>`.
 2. **REST API** for leagues, funds, players and picks.
-3. **Realtime (websocket)** for private fund state — current picks, scheduled
-   picks, value and ticks are **not** served over REST. The app subscribes on
-   `wss://api.ft-s02-prod.fantasy.norkon.net/Pulse/`.
+3. **Realtime feed** for private fund state — current picks, scheduled picks, value
+   and ticks are **not** served over REST. It is available two ways:
+   `wss://api.ft-s02-prod.fantasy.norkon.net/Pulse/` (websocket) or
+   `POST https://api.ft-s02-prod.fantasy.norkon.net/Pulse/Request/` (plain HTTP — the
+   path used on Cloudflare Workers, which cannot use `new WebSocket()`).
 
 The CLI obtains the FT cookie either from a running Chromium browser over the
 DevTools protocol (`Storage.getCookies`), from `--cookie`, or from a cached JWT.
@@ -170,7 +198,8 @@ DevTools protocol (`Storage.getCookies`), from `--cookie`, or from a cached JWT.
 | --- | --- |
 | Site | `https://stockpickinggame.ft.com/` |
 | API base | `https://api.ft-s02-prod.fantasy.norkon.net/api/` |
-| Realtime base | `wss://api.ft-s02-prod.fantasy.norkon.net/Pulse/` |
+| Realtime (ws) | `wss://api.ft-s02-prod.fantasy.norkon.net/Pulse/` |
+| Realtime (http) | `POST https://api.ft-s02-prod.fantasy.norkon.net/Pulse/Request/` |
 | Session refresh | `https://session-next.ft.com/sessions/s/<FTSession_s>` |
 
 ---

@@ -1,18 +1,26 @@
 #!/usr/bin/env node
 import process from 'node:process';
 import fs from 'node:fs';
-import { Api, ApiError } from './api.js';
-import { resolveAuth } from './auth.js';
-import { fundState } from './pulse.js';
-import { GICS, readSession, clearSession, SESSION_FILE } from './config.js';
-import { validateOrder, parseOrderSpec } from './rules.js';
-import { money, signedPct, table, ts, printJson } from './format.js';
-import type { FundState, LeagueTuple, PlayerData, Universe } from './types.js';
+import { Api, ApiError } from '../core/api.js';
+import { resolveAuth } from '../core/auth.js';
+import { pulseViaSocket } from '../core/pulse.js';
+import { GICS } from '../core/config.js';
+import { validateOrder, parseOrderSpec } from '../core/rules.js';
+import { money, signedPct, table, ts } from '../core/format.js';
+import type { PlayerData, Universe } from '../core/types.js';
+import { ftsessionCookie } from './cdp.js';
+import { FileSessionStore, SESSION_FILE } from './store-file.js';
 
 type Flags = Record<string, string | boolean>;
 interface Parsed {
   _: string[];
   flags: Flags;
+}
+
+const store = new FileSessionStore();
+
+function printJson(value: unknown): void {
+  process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 }
 
 const HELP = `stockgame - drive the FT Stock Picking Game from the CLI or an MCP client
@@ -114,16 +122,17 @@ function pos(flags: Flags): string[] {
 
 function authOptions(flags: Flags) {
   const noBrowser = Boolean(flags['no-browser']) || process.env.STOCKGAME_NO_BROWSER === '1';
+  const port = flags.port ? Number(flags.port) : 9222;
   return {
     token: str(flags.token),
     cookie: str(flags.cookie),
-    port: flags.port ? Number(flags.port) : 9222,
     refresh: Boolean(flags.refresh),
-    allowBrowser: !noBrowser,
+    store,
+    cookieSource: async () => (noBrowser ? null : await ftsessionCookie(port).catch(() => null)),
   };
 }
 
-async function makeApi(flags: Flags): Promise<{ api: Api; claims: Record<string, unknown> | null; source: string }> {
+async function makeApi(flags: Flags) {
   const opts = authOptions(flags);
   const { token, claims, source } = await resolveAuth(opts);
   const api = new Api(token, {
@@ -153,17 +162,12 @@ function stockByEid(universe: { overview?: Universe }, eid: string) {
 
 async function cmdAuth(flags: Flags): Promise<void> {
   const { claims, source } = await makeApi(flags);
-  const s = readSession();
+  const s = store.read();
   const expSec = Number(claims?.exp ?? 0);
   const exp = expSec ? new Date(expSec * 1000) : null;
   const minsLeft = exp ? Math.round((exp.getTime() - Date.now()) / 60000) : null;
   if (flags.json) {
-    printJson({
-      source,
-      expiresAt: exp?.toISOString() ?? null,
-      claims,
-      cookieCached: Boolean(s?.cookie),
-    });
+    printJson({ source, expiresAt: exp?.toISOString() ?? null, claims, cookieCached: Boolean(s?.cookie) });
     return;
   }
   console.log(`auth source : ${source}`);
@@ -193,14 +197,17 @@ async function cmdWhoami(flags: Flags): Promise<void> {
 
 function cmdConfig(): void {
   console.log(`session file: ${SESSION_FILE}`);
-  const s = readSession();
+  const s = store.read();
   console.log(`session     : ${s ? `present (updated ${s.updatedAt ?? '?'})` : 'none'}`);
 }
 
 async function cmdPortfolio(flags: Flags): Promise<void> {
   const { api } = await makeApi(flags);
   const { user, fid, secret } = await currentFund(api, flags);
-  const [state, universe] = await Promise.all([fundState(fid, secret), api.universe()]);
+  const [state, universe] = await Promise.all([
+    pulseViaSocket.fetchFund(fid, secret),
+    api.universe(),
+  ]);
 
   if (flags.json) {
     printJson({ fid, state });
@@ -434,7 +441,7 @@ function parseOrderFromFlags(flags: Flags, currentOrder: Order): Order {
 async function cmdReweight(flags: Flags): Promise<void> {
   const { api } = await makeApi(flags);
   const { fid, secret } = await currentFund(api, flags);
-  const current = (await fundState(fid, secret)).order ?? {};
+  const current = (await pulseViaSocket.fetchFund(fid, secret)).order ?? {};
   const order = parseOrderFromFlags(flags, current);
   const { errors, sum } = validateOrder(order);
 
@@ -554,11 +561,15 @@ async function cmdRaw(flags: Flags): Promise<void> {
 }
 
 async function cmdServe(flags: Flags): Promise<void> {
-  const mod = await import('./server/serve.js');
+  const mod = await import('./serve.js');
+  const noBrowser = Boolean(flags['no-browser']) || process.env.STOCKGAME_NO_BROWSER === '1';
   await mod.startServer({
     host: str(flags.host) ?? process.env.STOCKGAME_HOST ?? '127.0.0.1',
     port: flags.port ? Number(flags.port) : Number(process.env.STOCKGAME_PORT ?? 8787),
-    auth: authOptions(flags),
+    cookie: str(flags.cookie) ?? process.env.STOCKGAME_COOKIE,
+    token: str(flags.token) ?? process.env.STOCKGAME_TOKEN,
+    devtoolsPort: Number(process.env.STOCKGAME_DEVTOOLS_PORT ?? 9222),
+    allowBrowser: !noBrowser,
   });
 }
 
@@ -607,7 +618,7 @@ async function main(): Promise<void> {
     negotiate: cmdNegotiate,
     raw: cmdRaw,
     logout: async () => {
-      clearSession();
+      store.clear();
       console.log('session cleared');
     },
   };

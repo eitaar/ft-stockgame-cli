@@ -24,3 +24,8 @@ tmp/
 Thumbs.db
 .idea/
 .vscode/
+
+# cloudflare
+.wrangler/
+.wrangler-dry/
+.dev.vars

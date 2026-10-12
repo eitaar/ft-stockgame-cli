@@ -35,7 +35,7 @@ function isRequest(msg: JsonRpcMessage): boolean {
 
 /**
  * MCP Streamable HTTP transport (spec 2025-03-26), implemented against Web-standard
- * Request/Response so it runs on Node, Bun and Deno through Hono.
+ * Request/Response so it runs on Node, Bun, Deno and Cloudflare Workers.
  */
 export class McpEndpoint {
   #ctx: ToolContext;
@@ -49,7 +49,7 @@ export class McpEndpoint {
     const id = msg.id ?? null;
     switch (msg.method) {
       case 'initialize': {
-        const session = sessionId && this.#sessions.get(sessionId);
+        const session = sessionId ? this.#sessions.get(sessionId) : undefined;
         if (session) session.initialized = true;
         return {
           jsonrpc: '2.0',
@@ -128,7 +128,6 @@ export class McpEndpoint {
       if (res) responses.push(res);
     }
 
-    // A new session id is minted for the first request that isn't already in a session.
     if (fresh && messages.some((m) => m.method === 'initialize')) {
       sessionId = crypto.randomUUID();
       this.#sessions.set(sessionId, { createdAt: Date.now(), initialized: true });
@@ -137,7 +136,6 @@ export class McpEndpoint {
     const headers: Record<string, string> = { ...JSON_HEADERS };
     if (sessionId && !incomingSession) headers[SESSION_HEADER] = sessionId;
 
-    // Only notifications/responses -> 202 Accepted, no body.
     if (responses.length === 0) return new Response(null, { status: 202, headers });
 
     const body = Array.isArray(parsed) ? responses : responses[0];

@@ -21,7 +21,7 @@ export class ApiError extends Error {
   }
 }
 
-type Order = Record<string, number>;
+export type Order = Record<string, number>;
 
 interface CallOptions {
   body?: unknown;
@@ -93,7 +93,9 @@ export class Api {
   }
 
   searchPlayers(term: string): Promise<PlayerSearchResult[]> {
-    return this.get<PlayerSearchResult[]>(`FantasyFunds/searchplayerfund?term=${encodeURIComponent(term)}`);
+    return this.get<PlayerSearchResult[]>(
+      `FantasyFunds/searchplayerfund?term=${encodeURIComponent(term)}`,
+    );
   }
 
   // ---- universe / market -------------------------------------------------

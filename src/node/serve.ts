@@ -1,12 +1,18 @@
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
-import type { AuthOptions } from '../auth.js';
-import { createApp } from './app.js';
+import { pulseViaSocket } from '../core/pulse.js';
+import { createApp } from '../core/server/app.js';
+import { ftsessionCookie } from './cdp.js';
+import { FileSessionStore } from './store-file.js';
 
 export interface ServeOptions {
   host: string;
   port: number;
-  auth?: AuthOptions;
+  cookie?: string;
+  token?: string;
+  devtoolsPort?: number;
+  /** false = never touch a browser (cached/explicit cookie only) */
+  allowBrowser?: boolean;
 }
 
 export interface RunningServer {
@@ -15,12 +21,19 @@ export interface RunningServer {
 }
 
 /**
- * Start the Hono app on whichever runtime we're on. The same app object is passed
- * to `Bun.serve`, `Deno.serve` or `@hono/node-server`, so nothing in the app itself
- * is runtime-specific.
+ * Start the Hono app on whichever runtime we're on. The same app object is handed to
+ * `Bun.serve`, `Deno.serve` or `@hono/node-server`, so the app itself is
+ * runtime-agnostic.
  */
 export async function startServer(opts: ServeOptions): Promise<RunningServer> {
-  const app = createApp({ auth: opts.auth ?? {} });
+  const devtoolsPort = opts.devtoolsPort ?? 9222;
+  const app = createApp({
+    store: new FileSessionStore(),
+    cookieSource: async () =>
+      opts.allowBrowser === false ? null : await ftsessionCookie(devtoolsPort).catch(() => null),
+    transport: pulseViaSocket,
+  });
+
   const url = `http://${opts.host}:${opts.port}`;
   const g = globalThis as any;
 
@@ -49,8 +62,8 @@ export async function startServer(opts: ServeOptions): Promise<RunningServer> {
   };
 }
 
-/** Escape hatch for runtimes that import the default export (Bun/Deno). */
-export default createApp({});
+/** Default export so runtimes that import the module (Bun/Deno) get an app. */
+export default createApp({ transport: pulseViaSocket });
 
 function readFlag(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -63,18 +76,18 @@ const invokedDirectly =
 if (invokedDirectly) {
   const host = readFlag('host') ?? process.env.STOCKGAME_HOST ?? '127.0.0.1';
   const port = Number(readFlag('port') ?? process.env.STOCKGAME_PORT ?? 8787);
-  const cookie = readFlag('cookie') ?? process.env.STOCKGAME_COOKIE;
-  const token = readFlag('token') ?? process.env.STOCKGAME_TOKEN;
   const noBrowser = process.argv.includes('--no-browser') || process.env.STOCKGAME_NO_BROWSER === '1';
-  const devPort = Number(readFlag('devtools-port') ?? 9222);
   startServer({
     host,
     port,
-    auth: { cookie, token, port: devPort, allowBrowser: !noBrowser },
+    cookie: readFlag('cookie') ?? process.env.STOCKGAME_COOKIE,
+    token: readFlag('token') ?? process.env.STOCKGAME_TOKEN,
+    devtoolsPort: Number(readFlag('devtools-port') ?? 9222),
+    allowBrowser: !noBrowser,
   })
     .then((server) => {
       process.stdout.write(
-        `${SERVER_LINE}\n  MCP (Streamable HTTP): ${server.url}/mcp\n  health: ${server.url}/health\n`,
+        `ft-stockgame server listening\n  MCP (Streamable HTTP): ${server.url}/mcp\n  health: ${server.url}/health\n`,
       );
     })
     .catch((err: Error) => {
@@ -82,5 +95,3 @@ if (invokedDirectly) {
       process.exit(1);
     });
 }
-
-const SERVER_LINE = 'ft-stockgame server listening';

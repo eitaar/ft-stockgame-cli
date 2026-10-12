@@ -31,7 +31,3 @@ export function ts(seconds: number | null | undefined): string {
   if (!seconds) return '-';
   return new Date(seconds * 1000).toISOString().replace('T', ' ').slice(0, 16);
 }
-
-export function printJson(value: unknown): void {
-  process.stdout.write(JSON.stringify(value, null, 2) + '\n');
-}

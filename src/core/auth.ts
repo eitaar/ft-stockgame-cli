@@ -1,6 +1,17 @@
-import { HTTP_BASE, ORIGIN, GAME_URL, readSession, writeSession } from './config.js';
-import { ftsessionCookie } from './cdp.js';
+import { HTTP_BASE, ORIGIN, GAME_URL } from './config.js';
+import { MemorySessionStore, type SessionStore } from './session.js';
 import type { JwtClaims, SessionData } from './types.js';
+
+export interface AuthOptions {
+  token?: string;
+  cookie?: string;
+  refresh?: boolean;
+  validate?: boolean;
+  /** where the FT cookie + JWT are cached (file on Node, memory on Workers) */
+  store?: SessionStore;
+  /** how to obtain the FT cookie when nothing is cached (CDP on Node, secret on Workers) */
+  cookieSource?: () => Promise<string | null>;
+}
 
 export interface AuthResult {
   token: string;
@@ -9,20 +20,21 @@ export interface AuthResult {
   session?: SessionData | null;
 }
 
-export interface AuthOptions {
-  token?: string;
-  cookie?: string;
-  port?: number;
-  refresh?: boolean;
-  allowBrowser?: boolean;
-  validate?: boolean;
+const fallbackStore = new MemorySessionStore();
+
+function decodeBase64Url(input: string): string {
+  const padded = input.replace(/-/g, '+').replace(/_/g, '/');
+  const b64 = padded.padEnd(Math.ceil(padded.length / 4) * 4, '=');
+  const binary = atob(b64);
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 function decodeJwt(token: string): JwtClaims | null {
   try {
     const payload = token.split('.')[1];
     if (!payload) return null;
-    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as JwtClaims;
+    return JSON.parse(decodeBase64Url(payload)) as JwtClaims;
   } catch {
     return null;
   }
@@ -47,16 +59,6 @@ export async function initialize(
   return { token, claims: decodeJwt(token) };
 }
 
-function persist(cookie: string, result: { token: string; claims: JwtClaims | null }): void {
-  writeSession({
-    cookie,
-    token: result.token,
-    extId: result.claims?.extId,
-    userId: result.claims?.uid,
-    updatedAt: new Date().toISOString(),
-  });
-}
-
 /**
  * The API answers an invalid/expired bearer token with HTTP 200 and an anonymous
  * userdata payload ({active:false}) rather than 401, so token validity has to be
@@ -74,39 +76,20 @@ async function isAuthenticated(token: string): Promise<boolean> {
   }
 }
 
-/** Locate an FT session cookie: explicit, cached, then live browser. */
-async function findCookie(args: {
-  cookie?: string;
-  session: SessionData | null;
-  port: number;
-  allowBrowser: boolean;
-}): Promise<{ cookie: string; source: string } | null> {
-  if (args.cookie) return { cookie: args.cookie, source: '--cookie' };
-  if (args.session?.cookie) return { cookie: args.session.cookie, source: 'cached cookie' };
-  if (!args.allowBrowser) return null; // browser-free mode: only cached/explicit credentials
-  try {
-    return { cookie: await ftsessionCookie(args.port), source: `browser :${args.port}` };
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Resolve a bearer token. Once one FT session cookie has been cached, refreshing is
- * fully self-contained inside the CLI: cached cookie -> /initialize -> fresh JWT,
- * with no browser or DevTools involved. The browser is only contacted when there is
- * no usable cookie yet, and any token that fails the validity probe is refreshed
- * automatically.
+ * fully self-contained: cached cookie -> /initialize -> fresh JWT. The cookie source
+ * (DevTools on Node, a secret on Workers) is only consulted when nothing is cached.
  */
 export async function resolveAuth({
   token,
   cookie,
-  port = 9222,
   refresh = false,
-  allowBrowser = true,
   validate = true,
+  store = fallbackStore,
+  cookieSource,
 }: AuthOptions = {}): Promise<AuthResult> {
-  const session = readSession();
+  const session = store.read();
 
   const candidates: Array<{ value: string; source: string }> = [];
   if (token && !refresh) candidates.push({ value: token, source: '--token' });
@@ -118,34 +101,48 @@ export async function resolveAuth({
     }
   }
 
-  const found = await findCookie({ cookie, session, port, allowBrowser });
+  const findCookie = async (): Promise<{ cookie: string; source: string } | null> => {
+    if (cookie) return { cookie, source: '--cookie' };
+    if (session?.cookie) return { cookie: session.cookie, source: 'cached cookie' };
+    const fromSource = cookieSource ? await cookieSource() : null;
+    if (fromSource) return { cookie: fromSource, source: 'cookie source' };
+    return null;
+  };
+
+  const persist = (value: string, result: { token: string; claims: JwtClaims | null }): void => {
+    store.write({
+      cookie: value,
+      token: result.token,
+      extId: result.claims?.extId,
+      userId: result.claims?.uid,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const found = await findCookie();
   if (!found) {
     throw new Error(
-      'not logged in: no valid cached token and no browser cookie found. ' +
+      'not logged in: no valid cached token and no session cookie available. ' +
         'Log in to ft.com in your browser, or pass --cookie / --token.',
     );
   }
 
-  const tryCookie = async (
-    source: string,
-    value: string,
-  ): Promise<AuthResult | null> => {
-    const result = await initialize(value);
-    if (result && (!validate || (await isAuthenticated(result.token)))) {
-      persist(value, result);
-      return { token: result.token, claims: result.claims, source: `initialize (${source})` };
-    }
-    return null;
-  };
-
-  const first = await tryCookie(found.source, found.cookie);
-  if (first) return first;
+  const result = await initialize(found.cookie);
+  if (result && (!validate || (await isAuthenticated(result.token)))) {
+    persist(found.cookie, result);
+    return { token: result.token, claims: result.claims, source: `initialize (${found.source})` };
+  }
 
   // Cached cookie went stale (expired or rotated): try one fresher source.
-  const fresh = await findCookie({ session: null, port, allowBrowser: true });
-  if (fresh && fresh.cookie !== found.cookie) {
-    const second = await tryCookie(fresh.source, fresh.cookie);
-    if (second) return second;
+  if (!cookie) {
+    const fresh = cookieSource ? await cookieSource() : null;
+    if (fresh && fresh !== found.cookie) {
+      const retry = await initialize(fresh);
+      if (retry && (!validate || (await isAuthenticated(retry.token)))) {
+        persist(fresh, retry);
+        return { token: retry.token, claims: retry.claims, source: 'initialize (cookie source)' };
+      }
+    }
   }
   throw new Error(
     'not logged in: the FT session cookie was rejected (expired or rotated?). Log in again at ft.com.',
